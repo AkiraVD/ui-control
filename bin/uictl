@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""uictl launcher: works from a git checkout without installing."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from uictl.cli import main
+raise SystemExit(main())

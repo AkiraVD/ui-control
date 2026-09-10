@@ -1,0 +1,18 @@
+[project]
+name = "uictl"
+version = "0.1.0"
+description = "Drive Linux desktop applications from code or from Claude"
+requires-python = ">=3.10"
+# Everything else comes from the system: python3-gi (Atspi, Gst),
+# python3-dbus and python3-pil are already present on a GNOME desktop.
+dependencies = []
+
+[project.scripts]
+uictl = "uictl.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["uictl"]

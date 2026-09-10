@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Local artefacts from running the tools
+*.png
+probe.log
+screenshot.png
