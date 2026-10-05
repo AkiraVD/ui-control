@@ -7,6 +7,8 @@ import sys
 
 from . import a11y
 from .a11y import A11yError
+from .capture import CaptureError
+from .clipboard import ClipboardError
 from .session import Desktop
 from .uinput import UInputError
 
@@ -266,7 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     with Desktop() as desk:
         try:
             return args.func(desk, args)
-        except (A11yError, UInputError, ValueError) as exc:
+        except (A11yError, UInputError, CaptureError, ClipboardError,
+                ValueError) as exc:
             print(f"uictl: {exc}", file=sys.stderr)
             return 2
 

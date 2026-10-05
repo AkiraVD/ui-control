@@ -102,27 +102,18 @@ def check_atspi(rep: Report) -> None:
             f"{n} application(s) attached, {rich} exposing a tree")
 
 
-def check_portal(rep: Report) -> None:
+def _portal_capture() -> tuple[bool, str, str]:
+    """Is the ScreenCast portal route usable?  -> (ok, detail, fix)"""
     code, out, _ = _run([
         "gdbus", "call", "--session", "--dest", "org.freedesktop.portal.Desktop",
         "--object-path", "/org/freedesktop/portal/desktop",
         "--method", "org.freedesktop.DBus.Properties.Get",
         "org.freedesktop.portal.ScreenCast", "version"])
     if code != 0:
-        rep.add(FAIL, "screen capture (portal)", "ScreenCast portal not answering",
+        return (False, "no ScreenCast backend answering",
                 "sudo apt install xdg-desktop-portal xdg-desktop-portal-gnome "
                 "(or -kde/-wlr to match your desktop)")
-        return
     version = out.strip("(),<>uint32 ") or "?"
-    from .capture import TOKEN_PATH
-    remembered = TOKEN_PATH.exists()
-    rep.add(OK, "screen capture (portal)",
-            f"ScreenCast v{version}; consent "
-            + ("remembered" if remembered
-               else "not yet given (first capture will show a dialog)"))
-
-
-def check_gstreamer(rep: Report) -> None:
     try:
         import gi
         gi.require_version("Gst", "1.0")
@@ -130,13 +121,50 @@ def check_gstreamer(rep: Report) -> None:
         Gst.init(None)
         if Gst.ElementFactory.make("pipewiresrc") is None:
             raise RuntimeError("pipewiresrc element missing")
+        pipeline = f"GStreamer {Gst.version_string().split()[-1]}"
     except Exception as exc:
-        rep.add(FAIL, "capture pipeline", f"{exc}",
+        return (False, f"ScreenCast v{version} but the pipeline is broken: {exc}",
                 "sudo apt install gstreamer1.0-pipewire "
                 "gir1.2-gst-plugins-base-1.0")
+    from .capture_portal import TOKEN_PATH
+    consent = "remembered" if TOKEN_PATH.exists() else \
+        "not yet given (the first capture shows a dialog)"
+    return True, f"ScreenCast v{version} over {pipeline}; consent {consent}", ""
+
+
+def _x11_capture() -> tuple[bool, str, str]:
+    """Is the X11 root-window route usable?  -> (ok, detail, fix)"""
+    from . import capture
+    try:
+        with capture.new_session("x11") as session:
+            img = session.grab()
+    except Exception as exc:
+        return (False, f"root window grab failed: {exc}",
+                "sudo apt install python3-gi gir1.2-gtk-3.0")
+    return (True, f"Gdk root window, {img.width}x{img.height} "
+                  "(the cursor is never in the image)", "")
+
+
+def check_capture(rep: Report) -> None:
+    """Report the capture backend this machine will actually use, and the spare.
+
+    Only the active one blocks: a Cinnamon or XFCE desktop has no ScreenCast
+    portal at all and does not need one, and a GNOME Wayland session cannot
+    read the root window.  Either way one route is enough.
+    """
+    from . import capture
+    probe = {"x11": _x11_capture, "portal": _portal_capture}
+    try:
+        order = capture.backend_order()
+    except capture.CaptureError as exc:
+        rep.add(FAIL, "screen capture", str(exc))
         return
-    rep.add(OK, "capture pipeline", f"GStreamer {Gst.version_string().split()[-1]} "
-                                    "with pipewiresrc")
+    active, spares = order[0], order[1:]
+    ok, detail, fix = probe[active]()
+    rep.add(OK if ok else FAIL, "screen capture", f"{active}: {detail}", fix)
+    for backend in spares:
+        ok, detail, _ = probe[backend]()
+        rep.add(OK if ok else WARN, "capture fallback", f"{backend}: {detail}")
 
 
 def check_python_deps(rep: Report) -> None:
@@ -175,28 +203,36 @@ def check_screen(rep: Report) -> None:
     rep.add(OK, "screen size", f"{w}x{h}")
 
 
+def check_clipboard(rep: Report) -> None:
+    """Text the layout cannot type goes through the clipboard, so check it."""
+    from . import clipboard
+    try:
+        tool = clipboard.tool()
+    except clipboard.ClipboardError as exc:
+        rep.add(WARN, "clipboard", str(exc).split(";")[0],
+                f"sudo apt install {clipboard.package_for_session()}  "
+                "(only needed for text the keyboard layout cannot type)")
+        return
+    rep.add(OK, "clipboard",
+            f"{tool.name}; non-typeable text is pasted through it")
+
+
 def check_extras(rep: Report) -> None:
-    bits = []
-    for tool, why in (("notify-send", "takeover warnings"),
-                      ("wl-copy", "clipboard typing on Wayland"),
-                      ("xclip", "clipboard typing on X11"),
-                      ("xdotool", "raising XWayland windows")):
-        if shutil.which(tool):
-            bits.append(tool)
-    missing = [t for t in ("notify-send", "wl-copy") if not shutil.which(t)]
-    if missing:
-        rep.add(WARN, "helpers", "present: " + (", ".join(bits) or "none"),
-                "sudo apt install libnotify-bin wl-clipboard")
+    present = [t for t in ("notify-send", "xdotool") if shutil.which(t)]
+    if "notify-send" in present:
+        rep.add(OK, "helpers", ", ".join(present))
     else:
-        rep.add(OK, "helpers", ", ".join(bits))
+        rep.add(WARN, "helpers", "present: " + (", ".join(present) or "none"),
+                "sudo apt install libnotify-bin  (takeover warnings) "
+                "xdotool (raising windows)")
 
 
 def doctor() -> int:
     print("uictl doctor -- checking what this machine supports\n")
     rep = Report()
-    for check in (check_session, check_uinput, check_atspi, check_portal,
-                  check_gstreamer, check_python_deps, check_screen,
-                  check_layout, check_extras):
+    for check in (check_session, check_uinput, check_atspi, check_capture,
+                  check_python_deps, check_screen, check_layout,
+                  check_clipboard, check_extras):
         try:
             check(rep)
         except Exception as exc:

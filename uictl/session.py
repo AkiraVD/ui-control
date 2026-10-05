@@ -1,7 +1,8 @@
 """The high-level desktop automation API.
 
 Ties together the three layers: uinput for real input events, AT-SPI for
-finding controls by name, and the ScreenCast portal for pixels.
+finding controls by name, and whichever capture backend this
+session allows for pixels.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 
 from . import a11y, keymap
 from .a11y import A11yError, Element
-from .capture import ScreenCastSession
+from .capture import open_session
 from .typing import type_text
 from .uinput import Keyboard, Pointer, UInputError
 
@@ -92,7 +93,7 @@ class Desktop:
         self.width, self.height = width, height
         self._pointer: Pointer | None = None
         self._keyboard: Keyboard | None = None
-        self._capture: ScreenCastSession | None = None
+        self._capture = None
         self.warn = (os.environ.get("UICTL_WARN", "1") != "0"
                      if warn is None else warn)
         self.warn_delay = (float(os.environ.get("UICTL_WARN_DELAY", "3"))
@@ -126,9 +127,10 @@ class Desktop:
         return self._keyboard
 
     @property
-    def capture(self) -> ScreenCastSession:
+    def capture(self):
+        """The live capture session -- portal or X11, whichever works here."""
         if self._capture is None:
-            self._capture = ScreenCastSession().start()
+            self._capture = open_session()
         return self._capture
 
     # -- pointer --
@@ -239,8 +241,8 @@ class Desktop:
         """Best-effort raise of a window whose title or app matches.
 
         Wayland gives no general "activate this window" call, so this tries
-        the accessible focus first and falls back to XWayland's activation for
-        X11 clients.
+        the accessible focus first and falls back to xdotool, which reaches
+        real X11 clients and XWayland ones.
         """
         wins = [w for w in a11y.windows()
                 if pattern.lower() in w.name.lower()
@@ -258,7 +260,11 @@ class Desktop:
             if ids:
                 subprocess.run(["xdotool", "windowactivate", ids[-1]],
                                capture_output=True)
-                return f"focused {win.name!r} via xdotool (XWayland)"
+                return f"focused {win.name!r} via xdotool"
+        if os.environ.get("XDG_SESSION_TYPE", "").lower() == "x11":
+            raise A11yError(
+                f"could not raise {win.name!r}; install xdotool for window "
+                "activation on X11, or click the window or use alt+tab")
         raise A11yError(
             f"could not raise {win.name!r}; Wayland restricts window "
             "activation, so click the window or use alt+tab")

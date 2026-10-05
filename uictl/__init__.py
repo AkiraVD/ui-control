@@ -1,6 +1,8 @@
 """uictl -- drive Linux desktop applications from code or from Claude.
 
-Built for Wayland (GNOME) but the input layer works anywhere Linux evdev does.
+Runs on Wayland and on X11: input goes through evdev, which works anywhere,
+and screen capture picks the route the session allows.  `uictl doctor` says
+what a given machine supports.
 """
 from .session import Desktop, ClickResult, screen_size
 from .a11y import Element, A11yError, find, wait_for, windows, applications
