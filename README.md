@@ -269,6 +269,12 @@ python3 tests/probe.py /tmp/probe.log &
 python3 tests/test_injection.py /tmp/probe.log
 ```
 
+The probe has to be the frontmost window: injected events go to whatever holds
+focus, so a probe hidden behind a terminal reports nothing and every check
+fails while injection is in fact healthy.  The test checks this before it
+starts and tells you which of the two fixes to apply -- click the probe once,
+or start it under XWayland (`GDK_BACKEND=x11`) where it can raise itself.
+
 `tests/test_capture.py` needs no probe: it checks the backend this session
 picked, that a grab matches the screen size and is not a blank frame, and
 that the backend this session *cannot* use fails with an explanation instead

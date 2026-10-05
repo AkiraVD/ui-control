@@ -6,9 +6,17 @@ Start tests/probe.py first, then run this against the same log file:
     python3 tests/test_injection.py /tmp/probe.log
 
 Every tile clicked at its centre must report itself as hit, in order.
+
+The probe has to be the frontmost window.  Injected events go to whoever has
+focus, so a probe sitting behind a terminal swallows nothing and reports
+nothing -- which reads as twelve failed clicks when the injection path is
+perfectly healthy.  Wayland offers no way to raise a window, so this checks
+before testing and says what to do rather than blaming the code.
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 import time
 
@@ -36,6 +44,90 @@ def read_log(path):
     return geom, tiles, entries, scrolls
 
 
+PROBE_TITLE = "uictl probe"
+
+NOT_FRONTMOST = """\
+the probe is not receiving injected input, because it is not the frontmost
+window{whose}.  Every event below would land in whatever is, so these checks
+would report a dozen false failures while injection is in fact fine.
+
+Wayland has no call to raise a window -- `uictl focus_window` refuses for the
+same reason -- so pick one:
+
+  * click the probe window once to focus it, then re-run this; or
+  * restart the probe under XWayland, which can then be raised automatically:
+
+        GDK_BACKEND=x11 python3 tests/probe.py {log} &
+        python3 tests/test_injection.py {log}
+"""
+
+
+def active_window_name() -> str | None:
+    """Title of the focused window, or None when that cannot be determined.
+
+    xdotool only sees X11 and XWayland clients, so a native Wayland probe is
+    simply invisible to it.  None means "cannot tell", not "not focused".
+    """
+    if not shutil.which("xdotool"):
+        return None
+    try:
+        got = subprocess.run(["xdotool", "getactivewindow", "getwindowname"],
+                             capture_output=True, text=True, timeout=5)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return got.stdout.strip() if got.returncode == 0 else None
+
+
+def raise_probe() -> bool:
+    """Best effort: bring the probe to the front.  Only XWayland/X11 can."""
+    if not shutil.which("xdotool"):
+        return False
+    try:
+        found = subprocess.run(["xdotool", "search", "--name", PROBE_TITLE],
+                               capture_output=True, text=True, timeout=5)
+        ids = found.stdout.split()
+        if not ids:
+            return False
+        subprocess.run(["xdotool", "windowactivate", ids[-1]],
+                       capture_output=True, timeout=5)
+    except (subprocess.SubprocessError, OSError):
+        return False
+    time.sleep(0.6)
+    return active_window_name() == PROBE_TITLE
+
+
+def receives_input(desk, geom, log_path) -> bool:
+    """Click one tile and see whether the probe logged it.
+
+    The authoritative check: window-manager queries cannot answer this on
+    Wayland, but a tile that lights up proves the whole path end to end.  It
+    costs one stray click when the probe is not focused, which is the point --
+    one is cheap, the twelve that follow are not.
+    """
+    before = len(read_log(log_path)[1])
+    x, y, w, h = geom["A1"]
+    desk.click_at(x + w // 2, y + h // 2)
+    time.sleep(0.4)
+    return len(read_log(log_path)[1]) > before
+
+
+def probe_is_ready(desk, geom, log_path) -> tuple[bool, str]:
+    """Confirm the probe is frontmost, raising it if this session allows.
+
+    Returns (ready, note describing who holds focus instead).
+    """
+    active = active_window_name()
+    if active == PROBE_TITLE:
+        return True, ""
+    if active is None and receives_input(desk, geom, log_path):
+        # Nothing could tell us who is focused, but the probe answered.
+        return True, ""
+    if raise_probe():
+        return True, ""
+    whose = f" ({active!r} is)" if active else ""
+    return False, whose
+
+
 def main(log_path: str) -> int:
     geom, *_ = read_log(log_path)
     if not geom:
@@ -45,17 +137,26 @@ def main(log_path: str) -> int:
     failures = []
     desk = Desktop()
 
+    # 0. the probe must own the focus, or everything below tests the wrong app
+    ready, whose = probe_is_ready(desk, geom, log_path)
+    if not ready:
+        desk.close()
+        print(NOT_FRONTMOST.format(whose=whose, log=log_path))
+        return 2
+
     # 1. every tile, clicked by coordinate
     order = [f"{c}{r}" for r in (1, 2, 3) for c in "ABCD"]
+    baseline = len(read_log(log_path)[1])   # the preflight may have hit a tile
     for name in order:
         x, y, w, h = geom[name]
         desk.click_at(x + w // 2, y + h // 2)
         time.sleep(0.3)
     _, hits, _, _ = read_log(log_path)
-    if hits[:len(order)] != order:
-        failures.append(f"coordinate clicks: aimed {order}, hit {hits[:len(order)]}")
-    print(f"[{'ok' if not failures else 'FAIL'}] coordinate clicks: "
-          f"{len(hits)}/{len(order)} tiles in order")
+    clicked = hits[baseline:baseline + len(order)]
+    if clicked != order:
+        failures.append(f"coordinate clicks: aimed {order}, hit {clicked}")
+    print(f"[{'ok' if clicked == order else 'FAIL'}] coordinate clicks: "
+          f"{len(clicked)}/{len(order)} tiles in order")
 
     # 2. clicking by accessible name, without the pointer
     before = len(hits)

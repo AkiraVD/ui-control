@@ -68,6 +68,10 @@ class Probe(Gtk.Window):
         self.connect("key-press-event", self.on_key)
         self.connect("destroy", Gtk.main_quit)
         self.fullscreen()
+        # Injected events go to whoever has focus, so the probe is useless
+        # unless it is frontmost.  A window manager that honours this keeps it
+        # there; Wayland ignores it, which is why test_injection.py checks.
+        self.set_keep_above(True)
 
     def on_press(self, _w, ev):
         log("CLICK", f"button={ev.button} x={int(ev.x_root)} y={int(ev.y_root)}")
